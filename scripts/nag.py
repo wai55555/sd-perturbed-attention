@@ -1,10 +1,13 @@
-try:
+﻿try:
     import nag_forge_utils
 
     if nag_forge_utils.BACKEND in {"Forge", "reForge"}:
         import gradio as gr
-        from modules import scripts
+        from modules import scripts, script_callbacks
         from modules.ui_components import InputAccordion
+        from functools import partial
+        import sys
+        import traceback
 
         opNormalizedAttention = nag_forge_utils.NormalizedAttentionGuidance()
 
@@ -44,7 +47,7 @@ try:
 
                     negative = gr.Textbox(
                         label="NAG Negative Prompt",
-                        placeholder="Leave empty to reuse main negative.",
+                        placeholder="Supplements CFG when scale>1, or works alone when CFG=1. Leave empty to reuse main negative.",
                         lines=2
                     )
 
@@ -185,6 +188,35 @@ try:
                     unet_block_list,
                 ) = script_args
 
+                # Override with XYZ Plot values
+                xyz = getattr(p, "_nag_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "negative" in xyz:
+                    negative = xyz["negative"]
+                if "scale" in xyz:
+                    scale = xyz["scale"]
+                if "tau" in xyz:
+                    tau = xyz["tau"]
+                if "alpha" in xyz:
+                    alpha = xyz["alpha"]
+                if "hr_mode" in xyz:
+                    hr_mode = xyz["hr_mode"]
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+                if "hr_scale" in xyz:
+                    hr_scale = xyz["hr_scale"]
+                if "hr_tau" in xyz:
+                    hr_tau = xyz["hr_tau"]
+                if "hr_alpha" in xyz:
+                    hr_alpha = xyz["hr_alpha"]
+                if "sigma_start" in xyz:
+                    sigma_start = xyz["sigma_start"]
+                if "sigma_end" in xyz:
+                    sigma_end = xyz["sigma_end"]
+                if "unet_block_list" in xyz:
+                    unet_block_list = xyz["unet_block_list"]
+
                 if not enabled:
                     return
 
@@ -271,6 +303,117 @@ try:
                     )
 
                 return
+
+        # XYZ Plot support
+        def set_value(p, x, xs, *, field: str):
+            """Receive a value from XYZ Plot and store it in p._nag_xyz dict."""
+            if not hasattr(p, "_nag_xyz"):
+                p._nag_xyz = {}
+            p._nag_xyz[field] = x
+
+        def make_axis_on_xyz_grid():
+            """Add NAG parameter axis options to XYZ Plot."""
+            xyz_grid = None
+            for script in scripts.scripts_data:
+                if script.script_class.__module__ == "xyz_grid.py":
+                    xyz_grid = script.module
+                    break
+
+            if xyz_grid is None:
+                return
+
+            axis = [
+                # Basic parameters
+                xyz_grid.AxisOption(
+                    "(NAG) Enabled",
+                    str,
+                    partial(set_value, field="enabled"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Scale",
+                    float,
+                    partial(set_value, field="scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Tau",
+                    float,
+                    partial(set_value, field="tau"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Alpha",
+                    float,
+                    partial(set_value, field="alpha"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Negative Prompt",
+                    str,
+                    partial(set_value, field="negative"),
+                ),
+
+                # Hires Fix parameters
+                xyz_grid.AxisOption(
+                    "(NAG) Hires Fix Mode",
+                    str,
+                    partial(set_value, field="hr_mode"),
+                    choices=lambda: ["Both", "HRFix Off", "HRFix Only"]
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Hires Override",
+                    str,
+                    partial(set_value, field="hr_override"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Hires Scale",
+                    float,
+                    partial(set_value, field="hr_scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Hires Tau",
+                    float,
+                    partial(set_value, field="hr_tau"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Hires Alpha",
+                    float,
+                    partial(set_value, field="hr_alpha"),
+                ),
+
+                # Advanced parameters
+                xyz_grid.AxisOption(
+                    "(NAG) Sigma Start",
+                    float,
+                    partial(set_value, field="sigma_start"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) Sigma End",
+                    float,
+                    partial(set_value, field="sigma_end"),
+                ),
+                xyz_grid.AxisOption(
+                    "(NAG) U-Net Blocks",
+                    str,
+                    partial(set_value, field="unet_block_list"),
+                ),
+            ]
+
+            # Prevent duplicate registration
+            if not any(x.label.startswith("(NAG)") for x in xyz_grid.axis_options):
+                xyz_grid.axis_options.extend(axis)
+
+        def on_before_ui():
+            """Register XYZ Plot axes before UI initialization."""
+            try:
+                make_axis_on_xyz_grid()
+            except Exception:
+                error = traceback.format_exc()
+                print(
+                    f"[-] NAG Script: xyz_grid error:\n{error}",
+                    file=sys.stderr,
+                )
+
+        script_callbacks.on_before_ui(on_before_ui)
 
 except ImportError:
     pass

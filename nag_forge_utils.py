@@ -1,4 +1,4 @@
-from contextlib import suppress
+﻿from contextlib import suppress
 from typing import Callable
 
 import torch
@@ -178,4 +178,5 @@ class NormalizedAttentionGuidance:
                         prev_attn2_replace,
                     )
                     m.set_model_attn2_replace(nag_attn2_replace, block_name, block_id, t_idx)
+
         return m
