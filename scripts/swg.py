@@ -157,6 +157,13 @@
                     sigma_end,
                 ) = script_args
 
+                # Apply XYZ Plot overrides so cfg_scale restoration matches process_before_every_sampling
+                xyz = getattr(p, "_swg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+
                 if not enabled:
                     return
 

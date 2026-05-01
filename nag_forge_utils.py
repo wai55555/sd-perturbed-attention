@@ -89,10 +89,12 @@ def nag_attn2_replace_wrapper(
 
         norm_pos = torch.norm(z_pos, p=1, dim=-1, keepdim=True)
         norm_tilde = torch.norm(z_tilde, p=1, dim=-1, keepdim=True)
-        ratio = norm_tilde / norm_pos
+        # Clamp norm_pos away from zero to avoid NaN when z_pos is all-zero
+        ratio = norm_tilde / norm_pos.clamp(min=1e-6)
 
         # Tau threshold
-        z_hat = torch.where(ratio > tau, tau, ratio) / ratio * z_tilde
+        # Clamp ratio away from zero to avoid NaN in the division below
+        z_hat = torch.where(ratio > tau, tau, ratio) / ratio.clamp(min=1e-6) * z_tilde
 
         z_nag = alpha * z_hat + (1 - alpha) * z_pos
 
