@@ -6,8 +6,11 @@ try:
         import torch
         import torch.nn.functional as F
         import gradio as gr
-        from modules import scripts
+        from modules import scripts, script_callbacks
         from modules.ui_components import InputAccordion
+        from functools import partial
+        import sys
+        import traceback
 
         try:
             from guidance_utils import project
@@ -67,12 +70,12 @@ try:
 
         def _get_pad_size(h: int, w: int) -> tuple:
             """
-            Calculate padding size to the next power of 2.
+            Compute padding size to the next power of two.
             Args:
                 h: Height
                 w: Width
             Returns:
-                (h_ceil, w_ceil): Padded dimensions
+                (h_ceil, w_ceil): Padded size
             """
             h_ceil = 2 ** math.ceil(math.log2(h)) if h > 1 else 1
             w_ceil = 2 ** math.ceil(math.log2(w)) if w > 1 else 1
@@ -86,18 +89,18 @@ try:
             levels: int = 2,
         ) -> torch.Tensor:
             """
-            Compute FDG guidance.
+            Compute FDG guidance difference.
             Based on paper 2506.19713 'Guidance in the Frequency Domain Enables
             High-Fidelity Sampling at Low CFG Scales'.
             Args:
                 cond: Conditional prediction tensor
                 uncond: Unconditional prediction tensor
-                strength_high: High frequency guidance strength
-                strength_low: Low frequency guidance strength (equivalent to CFG scale)
+                strength_high: High-frequency guidance strength (scale for high-freq components)
+                strength_low: Low-frequency guidance strength (equivalent to CFG scale)
                 levels: Number of Laplacian pyramid levels
 
             Returns:
-                guidance_diff: FDG guided prediction
+                guidance_diff: FDG guidance difference (in the form of cond - uncond)
             """
             height, width = cond.shape[2:4]
             h_ceil, w_ceil = _get_pad_size(height, width)
@@ -118,14 +121,14 @@ try:
             scales = [strength_high, strength_low]
 
             for i, (cond_i, uncond_i) in enumerate(zip(cond_pyramid, uncond_pyramid)):
-                # Compute guidance diff in frequency band
+                # Compute guidance difference per frequency band
                 diff = cond_i - uncond_i
 
                 # Decompose into parallel and orthogonal components (matching ComfyUI implementation)
                 diff_parallel, diff_orthogonal = project(diff, cond_i)
                 diff = diff_parallel + diff_orthogonal
 
-                # Select scale (high frequency or low frequency)
+                # Select scale (high-frequency vs low-frequency)
                 scale = scales[min(i, len(scales) - 1)]
 
                 # Compute guided image
@@ -141,7 +144,7 @@ try:
             return guidance_diff
 
         class FrequencyDecoupledGuidanceScript(scripts.Script):
-            """FDG (Frequency-Decoupled Guidance) script for reForge/Forge"""
+            """FDG (Frequency-Decoupled Guidance) script for reForge/Forge."""
 
             def title(self) -> str:
                 return "Frequency-Decoupled Guidance"
@@ -159,7 +162,7 @@ try:
                         maximum=50.0,
                         step=0.1,
                         value=12.0,
-                        info="High frequency guidance strength. Paper recommended: 12.0"
+                        info="Guidance strength for high-frequency components. Recommended: 12.0"
                     )
 
                     strength_low = gr.Slider(
@@ -168,7 +171,7 @@ try:
                         maximum=10.0,
                         step=0.1,
                         value=1.0,
-                        info="Low frequency guidance strength (equivalent to CFG scale). Recommended 1.0 for low-CFG workflow"
+                        info="Guidance strength for low-frequency components (equivalent to CFG scale). Recommended: 1.0 for low-CFG setups"
                     )
 
                     with InputAccordion(False, label="Override for Hires Fix") as hr_override:
@@ -216,6 +219,21 @@ try:
                     hr_strength_low,
                 ) = script_args
 
+                # Override with XYZ Plot values
+                xyz = getattr(p, "_fdg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "strength_high" in xyz:
+                    strength_high = xyz["strength_high"]
+                if "strength_low" in xyz:
+                    strength_low = xyz["strength_low"]
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+                if "hr_strength_high" in xyz:
+                    hr_strength_high = xyz["hr_strength_high"]
+                if "hr_strength_low" in xyz:
+                    hr_strength_low = xyz["hr_strength_low"]
+
                 if not enabled:
                     return
 
@@ -238,7 +256,7 @@ try:
                 _strength_low = active_strength_low
 
                 def fdg_cfg_function(args):
-                    """FDG guidance CFG function"""
+                    """CFG function for FDG guidance."""
                     cond_denoised: torch.Tensor = args["cond_denoised"]
                     uncond_denoised: torch.Tensor = args["uncond_denoised"]
                     x_orig: torch.Tensor = args["input"]
@@ -251,7 +269,7 @@ try:
                         strength_low=_strength_low,
                     )
 
-                    # Return guidance diff (matching ComfyUI implementation)
+                    # Return guidance difference (matching ComfyUI implementation)
                     return x_orig - fdg_result
 
                 unet.model_options["sampler_cfg_function"] = fdg_cfg_function
@@ -275,6 +293,78 @@ try:
                             fdg_hr_strength_low=hr_strength_low,
                         )
                     )
+
+        # XYZ Plot support
+        def set_value(p, x, xs, *, field: str):
+            """Receive a value from XYZ Plot and store it in p._fdg_xyz dict."""
+            if not hasattr(p, "_fdg_xyz"):
+                p._fdg_xyz = {}
+            p._fdg_xyz[field] = x
+
+        def make_axis_on_xyz_grid():
+            """Add FDG parameter axis options to XYZ Plot."""
+            xyz_grid = None
+            for script in scripts.scripts_data:
+                if script.script_class.__module__ == "xyz_grid.py":
+                    xyz_grid = script.module
+                    break
+
+            if xyz_grid is None:
+                return
+
+            axis = [
+                # Basic parameters
+                xyz_grid.AxisOption(
+                    "(FDG) Enabled",
+                    str,
+                    partial(set_value, field="enabled"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(FDG) Strength High",
+                    float,
+                    partial(set_value, field="strength_high"),
+                ),
+                xyz_grid.AxisOption(
+                    "(FDG) Strength Low",
+                    float,
+                    partial(set_value, field="strength_low"),
+                ),
+                # Hires Fix parameters
+                xyz_grid.AxisOption(
+                    "(FDG) Hires Override",
+                    str,
+                    partial(set_value, field="hr_override"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(FDG) Hires Strength High",
+                    float,
+                    partial(set_value, field="hr_strength_high"),
+                ),
+                xyz_grid.AxisOption(
+                    "(FDG) Hires Strength Low",
+                    float,
+                    partial(set_value, field="hr_strength_low"),
+                ),
+            ]
+
+            # Prevent duplicate registration
+            if not any(x.label.startswith("(FDG)") for x in xyz_grid.axis_options):
+                xyz_grid.axis_options.extend(axis)
+
+        def on_before_ui():
+            """Register XYZ Plot axes before UI initialization."""
+            try:
+                make_axis_on_xyz_grid()
+            except Exception:
+                error = traceback.format_exc()
+                print(
+                    f"[-] FDG Script: xyz_grid error:\n{error}",
+                    file=sys.stderr,
+                )
+
+        script_callbacks.on_before_ui(on_before_ui)
 
 except ImportError:
     pass

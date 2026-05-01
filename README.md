@@ -2,19 +2,24 @@
 
 Implementation of
 
-- Perturbed-Attention Guidance (PAG) from [Self-Rectifying Diffusion Sampling with Perturbed-Attention Guidance (D. Ahn et al.)](https://ku-cvlab.github.io/Perturbed-Attention-Guidance/)
+- Perturbed-Attention Guidance from [Self-Rectifying Diffusion Sampling with Perturbed-Attention Guidance (D. Ahn et al.)](https://ku-cvlab.github.io/Perturbed-Attention-Guidance/)
 - [Smoothed Energy Guidance: Guiding Diffusion Models with Reduced Energy Curvature of Attention (Susung Hong)](https://arxiv.org/abs/2408.00760)
-- Sliding Window Guidance (SWG) from [The Unreasonable Effectiveness of Guidance for Diffusion Models (Kaiser et al.)](https://arxiv.org/abs/2411.10257)
+- Sliding Window Guidance from [The Unreasonable Effectiveness of Guidance for Diffusion Models (Kaiser et al.)](https://arxiv.org/abs/2411.10257)
 - [PLADIS: Pushing the Limits of Attention in Diffusion Models at Inference Time by Leveraging Sparsity](https://cubeyoung.github.io/pladis-proejct/) (ComfyUI-only)
-- [Normalized Attention Guidance: Universal Negative Guidance for Diffusion Models](https://arxiv.org/abs/2505.21179) (ComfyUI-only, has a description inside ComfyUI)
+- [Normalized Attention Guidance: Universal Negative Guidance for Diffusion Models](https://arxiv.org/abs/2505.21179)
 - [Token Perturbation Guidance for Diffusion Models](https://arxiv.org/abs/2506.10036) (ComfyUI-only)
-- Frequency-Decoupled Guidance (FDG) from [Guidance in the Frequency Domain Enables High-Fidelity Sampling at Low CFG Scales](https://arxiv.org/abs/2506.19713) (ComfyUI-only)
-- Momentum Guidance (MG) from [Momentum Guidance: Plug-and-Play Guidance for Flow Models](https://arxiv.org/abs/2602.20360) (ComfyUI-only, not limited to SD1.5/SDXL)
-- Sliding Mode Control CFG (SMC-CFG) from [CFG-Ctrl: Control-Based Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2603.03281) (ComfyUI-only, not limited to SD1.5/SDXL)
 
-as an extension for [ComfyUI](https://github.com/Comfy-Org/ComfyUI) and [SD WebUI (reForge)](https://github.com/Panchovix/stable-diffusion-webui-reForge).
+as an extension for [ComfyUI](https://github.com/comfyanonymous/ComfyUI) and [SD WebUI (reForge)](https://github.com/Panchovix/stable-diffusion-webui-reForge).
 
 Works with SD1.5 and SDXL.
+
+> [!NOTE]
+> `Normalized Attention Guidance` node has its own description inside ComfyUI - you can click on the node and press the button with an encircled question mark.
+
+> [!NOTE]
+> PLADIS isn't working properly right now - for some reason it produces messy images when applied to all cross-attention layers. I'll try to investigate the problem, but it wouldn't be easy considering the lack of official implementation + various typos in the original paper. For debug purposes, I might implement PLADIS as a diffusers pipeline to see if the problem still occurs.
+>
+> Any help is welcomed!
 
 ## Installation
 
@@ -24,7 +29,7 @@ You can either:
 
 - `git clone https://github.com/pamparamm/sd-perturbed-attention.git` into `ComfyUI/custom-nodes/` folder.
 
-- Install it via [ComfyUI Manager](https://github.com/Comfy-Org/ComfyUI-Manager) (search for custom node named "Perturbed-Attention Guidance").
+- Install it via [ComfyUI Manager](https://github.com/ltdrdata/ComfyUI-Manager) (search for custom node named "Perturbed-Attention Guidance").
 
 - Install it via [comfy-cli](https://comfydocs.org/comfy-cli/getting-started) with `comfy node registry-install sd-perturbed-attention`
 
@@ -52,9 +57,11 @@ As an alternative for A1111 WebUI you can use PAG implementation from [sd-webui-
 
 ![forge-seg](res/forge-seg.png)
 
+![forge-nag](res/forge-nag.png)
+
 > [!NOTE]
-> You can override `CFG Scale` and `PAG Scale`/`SEG Scale` for Hires. fix by opening/enabling `Override for Hires. fix` tab.
-> To disable PAG during Hires. fix, you can set `PAG Scale` under Override to 0.
+> You can override `CFG Scale` and `PAG Scale`/`SEG Scale`/`NAG Scale` for Hires. fix by opening/enabling `Override for Hires. fix` tab.
+> To disable guidance during Hires. fix, you can set the scale under Override to 0 or use the `HRFix Off` option in the `Hires Fix Mode` dropdown for widgets that support it.
 
 ### Inputs
 
@@ -74,101 +81,26 @@ As an alternative for A1111 WebUI you can use PAG implementation from [sd-webui-
   - SD1.5 U-Net has layers `d0`-`d5`, `m0`, `u0`-`u8`.
   - SDXL U-Net has layers `d0`-`d3`, `m0`, `u0`-`u5`. In addition, each block except `d0` and `d1` has `0-9` index values (like `m0.7` or `u0.4`). `d0` and `d1` have `0-1` index values.
   - Supports block ranges (`d0-d3` corresponds to `d0,d1,d2,d3`) and index value ranges (`d2.2-9` corresponds to all index values of `d2` with the exclusion of `d2.0` and `d2.1`).
+- `hr_mode`: Controls when guidance is active during generation
+  - `Both` - Apply guidance in both base generation and Hires. fix (default)
+  - `HRFix Off` - Only apply guidance during base generation, disable during Hires. fix
+  - `HRFix Only` - Only apply guidance during Hires. fix, disable during base generation
+
+### NAG-specific Inputs
+
+- `negative`: NAG negative prompt. When empty, uses the main negative prompt.
+- `tau`: Normalization threshold. Higher values increase the impact of the scale parameter.
+- `alpha`: Linear interpolation between original (at alpha=0) and NAG (at alpha=1) results.
 
 ## ComfyUI TensorRT PAG (Experimental)
 
-Deprecated: [ComfyUI_TensorRT](https://github.com/comfyanonymous/ComfyUI_TensorRT) is unmaintained.
+To use PAG together with [ComfyUI_TensorRT](https://github.com/comfyanonymous/ComfyUI_TensorRT), you'll need to:
 
+0. Have 24GB of VRAM.
+1. Build static/dynamic TRT engine of a desired model.
+2. Build static/dynamic TRT engine of the same model with the same TRT parameters, but with fixed PAG injection in selected UNET blocks (`TensorRT Attach PAG` node).
+3. Use `TensorRT Perturbed-Attention Guidance` node with two model inputs: one for base engine and one for PAG engine.
 
-## Citation
-```
-@misc{ahn2025selfrectifyingdiffusionsamplingperturbedattention,
-      title={Self-Rectifying Diffusion Sampling with Perturbed-Attention Guidance},
-      author={Donghoon Ahn and Hyoungwon Cho and Jaewon Min and Wooseok Jang and Jungwoo Kim and SeonHwa Kim and Hyun Hee Park and Kyong Hwan Jin and Seungryong Kim},
-      year={2025},
-      eprint={2403.17377},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2403.17377},
-}
+![trt-engines](res/trt-engines.png)
 
-@misc{hong2024smoothedenergyguidanceguiding,
-      title={Smoothed Energy Guidance: Guiding Diffusion Models with Reduced Energy Curvature of Attention},
-      author={Susung Hong},
-      year={2024},
-      eprint={2408.00760},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2408.00760},
-}
-
-@misc{adaloglou2025guidingdiffusionmodelusing,
-      title={Guiding a diffusion model using sliding windows},
-      author={Nikolas Adaloglou and Tim Kaiser and Damir Iagudin and Markus Kollmann},
-      year={2025},
-      eprint={2411.10257},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2411.10257},
-}
-
-@misc{kim2025pladispushinglimitsattention,
-      title={PLADIS: Pushing the Limits of Attention in Diffusion Models at Inference Time by Leveraging Sparsity},
-      author={Kwanyoung Kim and Byeongsu Sim},
-      year={2025},
-      eprint={2503.07677},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2503.07677},
-}
-
-@misc{chen2025normalizedattentionguidanceuniversal,
-      title={Normalized Attention Guidance: Universal Negative Guidance for Diffusion Models},
-      author={Dar-Yen Chen and Hmrishav Bandyopadhyay and Kai Zou and Yi-Zhe Song},
-      year={2025},
-      eprint={2505.21179},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2505.21179},
-}
-
-@misc{rajabi2025tokenperturbationguidancediffusion,
-      title={Token Perturbation Guidance for Diffusion Models},
-      author={Javad Rajabi and Soroush Mehraban and Seyedmorteza Sadat and Babak Taati},
-      year={2025},
-      eprint={2506.10036},
-      archivePrefix={arXiv},
-      primaryClass={cs.GR},
-      url={https://arxiv.org/abs/2506.10036},
-}
-
-@misc{sadat2025guidancefrequencydomainenables,
-      title={Guidance in the Frequency Domain Enables High-Fidelity Sampling at Low CFG Scales},
-      author={Seyedmorteza Sadat and Tobias Vontobel and Farnood Salehi and Romann M. Weber},
-      year={2025},
-      eprint={2506.19713},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2506.19713},
-}
-
-@misc{liao2026momentumguidanceplugandplayguidance,
-      title={Momentum Guidance: Plug-and-Play Guidance for Flow Models},
-      author={Runlong Liao and Jian Yu and Baiyu Su and Chi Zhang and Lizhang Chen and Qiang Liu},
-      year={2026},
-      eprint={2602.20360},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2602.20360},
-}
-
-@misc{wang2026cfgctrlcontrolbasedclassifierfreediffusion,
-      title={CFG-Ctrl: Control-Based Classifier-Free Diffusion Guidance},
-      author={Hanyang Wang and Yiyang Liu and Jiawei Chi and Fangfu Liu and Ran Xue and Yueqi Duan},
-      year={2026},
-      eprint={2603.03281},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2603.03281},
-}
-```
+![trt-inference](res/trt-inference.png)

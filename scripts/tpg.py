@@ -2,9 +2,13 @@ try:
     import nag_forge_utils
 
     if nag_forge_utils.BACKEND in {"Forge", "reForge"}:
+        import sys
+        import traceback
+        from functools import partial
+
         import torch
         import gradio as gr
-        from modules import scripts
+        from modules import scripts, script_callbacks
         from modules.ui_components import InputAccordion
 
         if nag_forge_utils.BACKEND == "reForge":
@@ -37,7 +41,7 @@ try:
 
 
         class TokenPerturbationGuidanceScript(scripts.Script):
-            """TPG (Token Perturbation Guidance) script for reForge/Forge"""
+            """TPG (Token Perturbation Guidance) script for reForge/Forge."""
 
             def title(self) -> str:
                 return "Token Perturbation Guidance"
@@ -112,8 +116,6 @@ try:
                         (scale, "tpg_scale"),
                         (rescale, "tpg_rescale"),
                         (rescale_mode, "tpg_rescale_mode"),
-                        (sigma_start, "tpg_sigma_start"),
-                        (sigma_end, "tpg_sigma_end"),
                         (hr_override, lambda p: gr.Checkbox.update(value="tpg_hr_override" in p)),
                         (hr_scale, "tpg_hr_scale"),
                     )
@@ -145,6 +147,27 @@ try:
                     hr_scale,
                 ) = script_args
 
+                # Override with XYZ Plot values
+                xyz = getattr(p, "_tpg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "scale" in xyz:
+                    scale = xyz["scale"]
+                if "sigma_start" in xyz:
+                    sigma_start = xyz["sigma_start"]
+                if "sigma_end" in xyz:
+                    sigma_end = xyz["sigma_end"]
+                if "rescale" in xyz:
+                    rescale = xyz["rescale"]
+                if "rescale_mode" in xyz:
+                    rescale_mode = xyz["rescale_mode"]
+                if "unet_block_list" in xyz:
+                    unet_block_list = xyz["unet_block_list"]
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+                if "hr_scale" in xyz:
+                    hr_scale = xyz["hr_scale"]
+
                 if not enabled:
                     return
 
@@ -157,7 +180,7 @@ try:
                 else:
                     active_scale = scale
 
-                # sigma_start of -1.0 means no limit
+                # -1.0 for sigma_start means no limit
                 _sigma_start = float("inf") if sigma_start < 0 else sigma_start
                 _sigma_end = sigma_end
 
@@ -190,7 +213,7 @@ try:
                 _rescale_mode = rescale_mode
 
                 def tpg_post_cfg_function(args):
-                    """CFG + TPG guidance calculation."""
+                    """Compute CFG + TPG guidance."""
                     model = args["model"]
                     cond_pred = args["cond_denoised"]
                     uncond_pred = args["uncond_denoised"]
@@ -236,14 +259,6 @@ try:
                     )
                 )
 
-                if sigma_start >= 0 or sigma_end >= 0:
-                    p.extra_generation_params.update(
-                        dict(
-                            tpg_sigma_start=sigma_start,
-                            tpg_sigma_end=sigma_end,
-                        )
-                    )
-
                 if hr_enabled and hr_override:
                     p.extra_generation_params.update(
                         dict(
@@ -251,6 +266,93 @@ try:
                             tpg_hr_scale=hr_scale,
                         )
                     )
+
+
+        # XYZ Plot support
+        def set_value(p, x, xs, *, field: str):
+            """Receive a value from XYZ Plot and store it in p._tpg_xyz dict."""
+            if not hasattr(p, "_tpg_xyz"):
+                p._tpg_xyz = {}
+            p._tpg_xyz[field] = x
+
+        def make_axis_on_xyz_grid():
+            """Add TPG parameter axis options to XYZ Plot."""
+            xyz_grid = None
+            for script in scripts.scripts_data:
+                if script.script_class.__module__ == "xyz_grid.py":
+                    xyz_grid = script.module
+                    break
+
+            if xyz_grid is None:
+                return
+
+            axis = [
+                xyz_grid.AxisOption(
+                    "(TPG) Enabled",
+                    str,
+                    partial(set_value, field="enabled"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Scale",
+                    float,
+                    partial(set_value, field="scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Sigma Start",
+                    float,
+                    partial(set_value, field="sigma_start"),
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Sigma End",
+                    float,
+                    partial(set_value, field="sigma_end"),
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Rescale",
+                    float,
+                    partial(set_value, field="rescale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Rescale Mode",
+                    str,
+                    partial(set_value, field="rescale_mode"),
+                    choices=lambda: ["full", "partial", "snf"]
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) U-Net Block List",
+                    str,
+                    partial(set_value, field="unet_block_list"),
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Hires Override",
+                    str,
+                    partial(set_value, field="hr_override"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(TPG) Hires Scale",
+                    float,
+                    partial(set_value, field="hr_scale"),
+                ),
+            ]
+
+            # Prevent duplicate registration
+            if not any(x.label.startswith("(TPG)") for x in xyz_grid.axis_options):
+                xyz_grid.axis_options.extend(axis)
+
+        def on_before_ui():
+            """Register XYZ Plot axes before UI initialization."""
+            try:
+                make_axis_on_xyz_grid()
+            except Exception:
+                error = traceback.format_exc()
+                print(
+                    f"[-] TPG Script: xyz_grid error:\n{error}",
+                    file=sys.stderr,
+                )
+
+        script_callbacks.on_before_ui(on_before_ui)
 
 except ImportError:
     pass

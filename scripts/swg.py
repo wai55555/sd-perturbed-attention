@@ -1,10 +1,14 @@
-try:
+﻿try:
     import pag_nodes
 
     if pag_nodes.BACKEND in {"Forge", "reForge"}:
+        import sys
+        import traceback
+        from functools import partial
+
         import gradio as gr
 
-        from modules import scripts
+        from modules import scripts, script_callbacks
         from modules.ui_components import InputAccordion
 
         opSWG = pag_nodes.SlidingWindowGuidanceAdvanced()
@@ -72,6 +76,29 @@ try:
                     sigma_end,
                 ) = script_args
 
+                # Override with XYZ Plot values
+                xyz = getattr(p, "_swg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "scale" in xyz:
+                    scale = xyz["scale"]
+                if "tile_width" in xyz:
+                    tile_width = int(xyz["tile_width"])
+                if "tile_height" in xyz:
+                    tile_height = int(xyz["tile_height"])
+                if "tile_overlap" in xyz:
+                    tile_overlap = int(xyz["tile_overlap"])
+                if "sigma_start" in xyz:
+                    sigma_start = xyz["sigma_start"]
+                if "sigma_end" in xyz:
+                    sigma_end = xyz["sigma_end"]
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+                if "hr_cfg" in xyz:
+                    hr_cfg = xyz["hr_cfg"]
+                if "hr_scale" in xyz:
+                    hr_scale = xyz["hr_scale"]
+
                 if not enabled:
                     return
 
@@ -130,6 +157,13 @@ try:
                     sigma_end,
                 ) = script_args
 
+                # Apply XYZ Plot overrides so cfg_scale restoration matches process_before_every_sampling
+                xyz = getattr(p, "_swg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+
                 if not enabled:
                     return
 
@@ -139,6 +173,98 @@ try:
                     p.cfg_scale = p.cfg_scale_before_hr
 
                 return
+
+        # XYZ Plot support
+        def set_value(p, x, xs, *, field: str):
+            """Receive a value from XYZ Plot and store it in p._swg_xyz dict."""
+            if not hasattr(p, "_swg_xyz"):
+                p._swg_xyz = {}
+            p._swg_xyz[field] = x
+
+        def make_axis_on_xyz_grid():
+            """Add SWG parameter axis options to XYZ Plot."""
+            xyz_grid = None
+            for script in scripts.scripts_data:
+                if script.script_class.__module__ == "xyz_grid.py":
+                    xyz_grid = script.module
+                    break
+
+            if xyz_grid is None:
+                return
+
+            axis = [
+                # Basic parameters
+                xyz_grid.AxisOption(
+                    "(SWG) Enabled",
+                    str,
+                    partial(set_value, field="enabled"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Scale",
+                    float,
+                    partial(set_value, field="scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Tile Width",
+                    float,
+                    partial(set_value, field="tile_width"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Tile Height",
+                    float,
+                    partial(set_value, field="tile_height"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Tile Overlap",
+                    float,
+                    partial(set_value, field="tile_overlap"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Sigma Start",
+                    float,
+                    partial(set_value, field="sigma_start"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Sigma End",
+                    float,
+                    partial(set_value, field="sigma_end"),
+                ),
+                # Hires Fix parameters
+                xyz_grid.AxisOption(
+                    "(SWG) Hires Override",
+                    str,
+                    partial(set_value, field="hr_override"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Hires CFG",
+                    float,
+                    partial(set_value, field="hr_cfg"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SWG) Hires Scale",
+                    float,
+                    partial(set_value, field="hr_scale"),
+                ),
+            ]
+
+            # Prevent duplicate registration
+            if not any(x.label.startswith("(SWG)") for x in xyz_grid.axis_options):
+                xyz_grid.axis_options.extend(axis)
+
+        def on_before_ui():
+            """Register XYZ Plot axes before UI initialization."""
+            try:
+                make_axis_on_xyz_grid()
+            except Exception:
+                error = traceback.format_exc()
+                print(
+                    f"[-] SWG Script: xyz_grid error:\n{error}",
+                    file=sys.stderr,
+                )
+
+        script_callbacks.on_before_ui(on_before_ui)
 
 except ImportError:
     pass

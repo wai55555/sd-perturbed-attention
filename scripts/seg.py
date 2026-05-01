@@ -1,10 +1,14 @@
-try:
+﻿try:
     import pag_nodes
 
     if pag_nodes.BACKEND in {"Forge", "reForge"}:
+        import sys
+        import traceback
+        from functools import partial
+
         import gradio as gr
 
-        from modules import scripts
+        from modules import scripts, script_callbacks
         from modules.ui_components import InputAccordion
 
         opSEG = pag_nodes.SmoothedEnergyGuidanceAdvanced()
@@ -80,6 +84,41 @@ try:
                     sigma_end,
                 ) = script_args
 
+                # Override with XYZ Plot values
+                xyz = getattr(p, "_seg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "scale" in xyz:
+                    scale = xyz["scale"]
+                if "rescale_seg" in xyz:
+                    rescale_seg = xyz["rescale_seg"]
+                if "rescale_mode" in xyz:
+                    rescale_mode = xyz["rescale_mode"]
+                if "blur_sigma" in xyz:
+                    blur_sigma = xyz["blur_sigma"]
+                if "block" in xyz:
+                    block = xyz["block"]
+                if "block_id" in xyz:
+                    block_id = xyz["block_id"]
+                if "block_list" in xyz:
+                    block_list = xyz["block_list"]
+                if "sigma_start" in xyz:
+                    sigma_start = xyz["sigma_start"]
+                if "sigma_end" in xyz:
+                    sigma_end = xyz["sigma_end"]
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+                if "hr_cfg" in xyz:
+                    hr_cfg = xyz["hr_cfg"]
+                if "hr_scale" in xyz:
+                    hr_scale = xyz["hr_scale"]
+                if "hr_rescale_seg" in xyz:
+                    hr_rescale_seg = xyz["hr_rescale_seg"]
+                if "hr_rescale_mode" in xyz:
+                    hr_rescale_mode = xyz["hr_rescale_mode"]
+                if "hr_blur_sigma" in xyz:
+                    hr_blur_sigma = xyz["hr_blur_sigma"]
+
                 if not enabled:
                     return
 
@@ -150,6 +189,13 @@ try:
                     sigma_end,
                 ) = script_args
 
+                # Apply XYZ Plot overrides so cfg_scale restoration matches process_before_every_sampling
+                xyz = getattr(p, "_seg_xyz", {})
+                if "enabled" in xyz:
+                    enabled = xyz["enabled"] == "True"
+                if "hr_override" in xyz:
+                    hr_override = xyz["hr_override"] == "True"
+
                 if not enabled:
                     return
 
@@ -159,6 +205,131 @@ try:
                     p.cfg_scale = p.cfg_scale_before_hr
 
                 return
+
+        # XYZ Plot support
+        def set_value(p, x, xs, *, field: str):
+            """Receive a value from XYZ Plot and store it in p._seg_xyz dict."""
+            if not hasattr(p, "_seg_xyz"):
+                p._seg_xyz = {}
+            p._seg_xyz[field] = x
+
+        def make_axis_on_xyz_grid():
+            """Add SEG parameter axis options to XYZ Plot."""
+            xyz_grid = None
+            for script in scripts.scripts_data:
+                if script.script_class.__module__ == "xyz_grid.py":
+                    xyz_grid = script.module
+                    break
+
+            if xyz_grid is None:
+                return
+
+            axis = [
+                # Basic parameters
+                xyz_grid.AxisOption(
+                    "(SEG) Enabled",
+                    str,
+                    partial(set_value, field="enabled"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Scale",
+                    float,
+                    partial(set_value, field="scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Rescale",
+                    float,
+                    partial(set_value, field="rescale_seg"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Rescale Mode",
+                    str,
+                    partial(set_value, field="rescale_mode"),
+                    choices=lambda: ["full", "partial", "snf"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Blur Sigma",
+                    float,
+                    partial(set_value, field="blur_sigma"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Block",
+                    str,
+                    partial(set_value, field="block"),
+                    choices=lambda: ["input", "middle", "output"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Block Id",
+                    float,
+                    partial(set_value, field="block_id"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Block List",
+                    str,
+                    partial(set_value, field="block_list"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Sigma Start",
+                    float,
+                    partial(set_value, field="sigma_start"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Sigma End",
+                    float,
+                    partial(set_value, field="sigma_end"),
+                ),
+                # Hires Fix parameters
+                xyz_grid.AxisOption(
+                    "(SEG) Hires Override",
+                    str,
+                    partial(set_value, field="hr_override"),
+                    choices=lambda: ["True", "False"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Hires CFG",
+                    float,
+                    partial(set_value, field="hr_cfg"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Hires Scale",
+                    float,
+                    partial(set_value, field="hr_scale"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Hires Rescale",
+                    float,
+                    partial(set_value, field="hr_rescale_seg"),
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Hires Rescale Mode",
+                    str,
+                    partial(set_value, field="hr_rescale_mode"),
+                    choices=lambda: ["full", "partial", "snf"]
+                ),
+                xyz_grid.AxisOption(
+                    "(SEG) Hires Blur Sigma",
+                    float,
+                    partial(set_value, field="hr_blur_sigma"),
+                ),
+            ]
+
+            # Prevent duplicate registration
+            if not any(x.label.startswith("(SEG)") for x in xyz_grid.axis_options):
+                xyz_grid.axis_options.extend(axis)
+
+        def on_before_ui():
+            """Register XYZ Plot axes before UI initialization."""
+            try:
+                make_axis_on_xyz_grid()
+            except Exception:
+                error = traceback.format_exc()
+                print(
+                    f"[-] SEG Script: xyz_grid error:\n{error}",
+                    file=sys.stderr,
+                )
+
+        script_callbacks.on_before_ui(on_before_ui)
 
 except ImportError:
     pass
