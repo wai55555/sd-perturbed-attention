@@ -69,8 +69,8 @@ def nag_attn2_replace_wrapper(
         k_neg = attn2_module.to_k(negative_cond_tensor)
         v_neg = attn2_module.to_v(negative_cond_tensor)
 
-        bs = q.shape[0] // len(cond_or_uncond) * cond_or_uncond.count(COND)
-        k_neg_, v_neg_ = k_neg.repeat_interleave(bs, dim=0), v_neg.repeat_interleave(bs, dim=0)
+        # k_neg/v_neg already have batch_size matching q_pos, no repeat needed
+        k_neg_, v_neg_ = k_neg, v_neg
 
         if len(cond_or_uncond) == 1:
             # CFG=1 case: only conditional, no chunking needed
